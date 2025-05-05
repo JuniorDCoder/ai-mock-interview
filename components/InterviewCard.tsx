@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import React from 'react'
 import dayjs from 'dayjs'
 import Image from 'next/image'
@@ -6,7 +7,16 @@ import { Button } from './ui/button'
 import Link from 'next/link'
 import DisplayTechIcons from './DisplayTechIcons'
 
-const InterviewCard = ({interviewId, userId, role, type, techstack, createdAt}: {InterviewCardProps}) => {
+interface InterviewCardProps {
+  interviewId: string;
+  userId: string;
+  role: string;
+  type: string;
+  techstack: string[];
+  createdAt: string | Date;
+}
+
+const InterviewCard = ({interviewId, userId, role, type, techstack, createdAt}: InterviewCardProps) => {
   const feedback = null as Feedback | null
   const normalizedType = /mix/gi.test(type) ? "Mixed" : type
   const formattedDate = dayjs(feedback?.createdAt || createdAt || Date.now()).format("MMM D, YYYY")
