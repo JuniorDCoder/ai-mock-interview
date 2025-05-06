@@ -6,6 +6,7 @@ import React, {useEffect, useState} from 'react'
 import { cn } from '@/lib/utils'
 import { useRouter } from 'next/navigation'
 import { vapi } from '@/lib/vapi.sdk'
+import { toast } from 'sonner'
 
 enum CallStatus {
     INACTIVE = "INACTIVE",
@@ -47,6 +48,7 @@ const Agent = ({userName, userId, type} : AgentProps) => {
         const onError = (error: { error?: { type: string; msg: string } }) => {
             console.error('Error:', error);
             if (error.error?.type === 'ejected') {
+                toast.error('You have been ejected from the meeting');
                 console.warn('Meeting ended:', error.error.msg);
                 setcallStatus(CallStatus.FINISHED);
             }
