@@ -1,5 +1,3 @@
-// 1. First create a file at: /pages/api/vapi/generate.ts
-
 import { generateText } from 'ai'
 import { google } from '@ai-sdk/google'
 import { getRandomInterviewCover } from '@/lib/utils'
@@ -59,10 +57,19 @@ export async function POST(request: Request) {
 
     const { type, role, level, techstack, amount, userid } = requestBody;
 
-    // Validate required fields (basic validation)
+    // Validate required fields (more thorough validation)
     if (!type || !role || !level || !techstack || !amount || !userid) {
+        const missingFields = [];
+        if (!type) missingFields.push('type');
+        if (!role) missingFields.push('role');
+        if (!level) missingFields.push('level');
+        if (!techstack) missingFields.push('techstack');
+        if (!amount) missingFields.push('amount');
+        if (!userid) missingFields.push('userid');
+        
+        console.error("Missing fields:", missingFields);
         return Response.json(
-            { success: false, error: "Missing required fields" },
+            { success: false, error: `Missing required fields: ${missingFields.join(', ')}` },
             { status: 400 }
         );
     }
@@ -78,17 +85,25 @@ export async function POST(request: Request) {
     });
     
     // Start processing in the background
-    processInterview(interviewId, requestBody).catch(error => {
-        console.error("Error processing interview:", error);
-        // Update pending request with error
-        if (pendingRequests.has(interviewId)) {
-            pendingRequests.set(interviewId, {
-                completed: true,
-                result: { success: false, error: "Processing failed" },
-                params: requestBody
-            });
-        }
-    });
+    // Use .then().catch() to ensure the Promise is not orphaned
+    processInterview(interviewId, requestBody)
+        .then(result => {
+            console.log("Interview processing completed successfully:", result);
+        })
+        .catch(error => {
+            console.error("Error processing interview:", error);
+            // Update pending request with error
+            if (pendingRequests.has(interviewId)) {
+                pendingRequests.set(interviewId, {
+                    completed: true,
+                    result: { 
+                        success: false, 
+                        error: "Processing failed: " + (error instanceof Error ? error.message : String(error)) 
+                    },
+                    params: requestBody
+                });
+            }
+        });
     
     // Immediately return a success response with the ID
     return Response.json({ 
@@ -115,6 +130,16 @@ async function processInterview(interviewId: string, params: InterviewParams) {
     try {
         console.log(`Generating questions for ${role} (${level}) with focus on ${type}`);
         
+        // Verify Firebase connection first
+        try {
+            // Simple test to check if Firebase is connected
+            const testDoc = await db.collection('system').doc('test').get();
+            console.log("Firebase connection verified:", testDoc.exists ? "Test document exists" : "Test document doesn't exist, but connection is working");
+        } catch (dbError) {
+            console.error("Firebase connection error:", dbError);
+            throw new Error(`Firebase connection failed: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
+        }
+        
         const { text: questions } = await generateText({
             model: google('gemini-2.0-flash-001'),
             prompt: `Prepare questions for a job interview.
@@ -136,17 +161,36 @@ async function processInterview(interviewId: string, params: InterviewParams) {
         
         let parsedQuestions;
         try {
+            // Try to parse as JSON first
             parsedQuestions = JSON.parse(questions);
+            
+            // Validate the parsed result is an array
+            if (!Array.isArray(parsedQuestions)) {
+                console.warn("Parsed questions is not an array, converting to array");
+                parsedQuestions = [questions];
+            }
         } catch (parseError) {
-            console.error("Failed to parse questions:", parseError);
-            parsedQuestions = [questions];
+            console.error("Failed to parse questions as JSON:", parseError);
+            // Fallback: Split by newlines and clean up
+            parsedQuestions = questions
+                .split('\n')
+                .filter(q => q.trim().length > 0)
+                .map(q => q
+                    .replace(/^\d+\.\s*/, '') // Remove leading numbers
+                    .replace(/^["'\[\{]|["'\]\}]$/g, '') // Remove quotes and brackets
+                    .trim()
+                );
+                
+            if (parsedQuestions.length === 0) {
+                parsedQuestions = [questions]; // If all else fails, use the raw text
+            }
         }
     
         const interview = {
             role,
             type,
             level,
-            techstack: typeof techstack === 'string' ? techstack.split(',') : techstack,
+            techstack: typeof techstack === 'string' ? techstack.split(',').map(item => item.trim()) : techstack,
             questions: parsedQuestions,
             userId: userid,
             finalized: true,
@@ -156,19 +200,26 @@ async function processInterview(interviewId: string, params: InterviewParams) {
         
         console.log("Document to be stored:", interview);
     
-        const docRef = await db.collection('interviews').add(interview);
-        console.log("Document stored successfully with ID:", docRef.id);
-        
-        // Update pending request with success result
-        pendingRequests.set(interviewId, {
-            completed: true,
-            result: { 
-                success: true, 
-                message: "Interview questions generated and stored successfully",
-                documentId: docRef.id
-            },
-            params: params
-        });
+        try {
+            const docRef = await db.collection('interviews').add(interview);
+            console.log("Document stored successfully with ID:", docRef.id);
+            
+            // Update pending request with success result
+            pendingRequests.set(interviewId, {
+                completed: true,
+                result: { 
+                    success: true, 
+                    message: "Interview questions generated and stored successfully",
+                    documentId: docRef.id
+                },
+                params: params
+            });
+            
+            return { documentId: docRef.id };
+        } catch (firestoreError) {
+            console.error("Firestore error when adding document:", firestoreError);
+            throw new Error(`Firestore write failed: ${firestoreError instanceof Error ? firestoreError.message : String(firestoreError)}`);
+        }
     } catch (error) {
         console.error("Error in processing:", error);
         
@@ -181,5 +232,8 @@ async function processInterview(interviewId: string, params: InterviewParams) {
             },
             params: params
         });
+        
+        // Re-throw the error so it's caught by the .catch() in the POST handler
+        throw error;
     }
 }
