@@ -54,6 +54,7 @@ export async function POST(request: Request) {
     const { type, role, level, techstack, amount, userid } = requestBody;
 
     if (!type || !role || !level || !techstack || !amount || !userid) {
+         // ... (your existing missing fields check)
         const missingFields = [];
         if (!type) missingFields.push('type');
         if (!role) missingFields.push('role');
@@ -69,41 +70,32 @@ export async function POST(request: Request) {
         );
     }
 
-    const interviewId = `interview_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-    console.log("Generated interview ID:", interviewId);
+    // You might not need the pendingRequests map for this direct flow
+    // as the POST will now wait for completion
+    // The GET endpoint pattern might need adjustment depending on desired behavior
 
-    pendingRequests.set(interviewId, {
-        completed: false,
-        result: null,
-        params: requestBody
-    });
+    console.log("Starting synchronous processing for interview...");
 
-    console.log("Starting background processing for interview ID:", interviewId);
+    try {
+        const processResult = await processInterview("sync_request", requestBody); // Using a placeholder ID or adjusting processInterview signature
+        console.log("Interview processing completed successfully:", processResult);
 
-    processInterview(interviewId, requestBody)
-        .then(result => {
-            console.log("Interview processing completed successfully:", result);
-        })
-        .catch(error => {
-            console.error("Error processing interview:", error);
-            if (pendingRequests.has(interviewId)) {
-                pendingRequests.set(interviewId, {
-                    completed: true,
-                    result: {
-                        success: false,
-                        error: "Processing failed: " + (error instanceof Error ? error.message : String(error))
-                    },
-                    params: requestBody
-                });
-            }
-        });
-
-    return Response.json({
-        success: true,
-        status: 'accepted',
-        interviewId: interviewId,
-        message: "Interview generation started"
-    }, { status: 202 });
+        // Return success response after successful processing and write
+        return Response.json({
+            success: true,
+            status: 'completed', // Status is now completed in this request cycle
+            documentId: processResult.documentId, // Get doc ID from result
+            message: "Interview questions generated and stored successfully"
+        }, { status: 200 }); // Return 200 OK as the job is done
+    } catch (error) {
+        console.error("Error processing interview:", error);
+        // Return error response if processing or write failed
+        return Response.json({
+            success: false,
+            status: 'failed',
+            error: "Internal server error: " + (error instanceof Error ? error.message : String(error))
+        }, { status: 500 }); // Return 500 Internal Server Error
+    }
 }
 
 interface InterviewParams {
