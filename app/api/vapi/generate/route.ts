@@ -42,7 +42,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
     console.log("API endpoint called");
-    
+
     let requestBody;
     try {
         requestBody = await request.json();
@@ -57,7 +57,6 @@ export async function POST(request: Request) {
 
     const { type, role, level, techstack, amount, userid } = requestBody;
 
-    // Validate required fields (more thorough validation)
     if (!type || !role || !level || !techstack || !amount || !userid) {
         const missingFields = [];
         if (!type) missingFields.push('type');
@@ -66,7 +65,7 @@ export async function POST(request: Request) {
         if (!techstack) missingFields.push('techstack');
         if (!amount) missingFields.push('amount');
         if (!userid) missingFields.push('userid');
-        
+
         console.error("Missing fields:", missingFields);
         return Response.json(
             { success: false, error: `Missing required fields: ${missingFields.join(', ')}` },
@@ -74,25 +73,23 @@ export async function POST(request: Request) {
         );
     }
 
-    // Generate a unique ID for this request
     const interviewId = `interview_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
-    
-    // Add to pending requests
+    console.log("Generated interview ID:", interviewId);
+
     pendingRequests.set(interviewId, {
         completed: false,
         result: null,
         params: requestBody
     });
-    
-    // Start processing in the background
-    // Use .then().catch() to ensure the Promise is not orphaned
+
+    console.log("Starting background processing for interview ID:", interviewId);
+
     processInterview(interviewId, requestBody)
         .then(result => {
             console.log("Interview processing completed successfully:", result);
         })
         .catch(error => {
             console.error("Error processing interview:", error);
-            // Update pending request with error
             if (pendingRequests.has(interviewId)) {
                 pendingRequests.set(interviewId, {
                     completed: true,
@@ -104,8 +101,7 @@ export async function POST(request: Request) {
                 });
             }
         });
-    
-    // Immediately return a success response with the ID
+
     return Response.json({ 
         success: true, 
         status: 'accepted',
@@ -125,21 +121,21 @@ interface InterviewParams {
 }
 
 async function processInterview(interviewId: string, params: InterviewParams) {
+    console.log(`Processing interview with ID: ${interviewId}`);
     const { type, role, level, techstack, amount, userid } = params;
-    
+
     try {
         console.log(`Generating questions for ${role} (${level}) with focus on ${type}`);
         
-        // Verify Firebase connection first
+        // Verify Firebase connection
         try {
-            // Simple test to check if Firebase is connected
             const testDoc = await db.collection('system').doc('test').get();
             console.log("Firebase connection verified:", testDoc.exists ? "Test document exists" : "Test document doesn't exist, but connection is working");
         } catch (dbError) {
             console.error("Firebase connection error:", dbError);
             throw new Error(`Firebase connection failed: ${dbError instanceof Error ? dbError.message : String(dbError)}`);
         }
-        
+
         const { text: questions } = await generateText({
             model: google('gemini-2.0-flash-001'),
             prompt: `Prepare questions for a job interview.
@@ -149,81 +145,44 @@ async function processInterview(interviewId: string, params: InterviewParams) {
                 The focus between behavioural and technical questions should lean towards: ${type}.
                 The amount of questions required is: ${amount}.
                 Please return only the questions, without any additional text.
-                The questions are going to be read by a voice assistant so do not use "/" or "*" or any other special characters which might break the voice assistant.
                 Return the questions formatted like this:
                 ["Question 1", "Question 2", "Question 3"]
-                
-                Thank you! <3
             `
         });
-    
+
         console.log("Generated Questions:", questions);
-        
-        let parsedQuestions;
-        try {
-            // Try to parse as JSON first
-            parsedQuestions = JSON.parse(questions);
-            
-            // Validate the parsed result is an array
-            if (!Array.isArray(parsedQuestions)) {
-                console.warn("Parsed questions is not an array, converting to array");
-                parsedQuestions = [questions];
-            }
-        } catch (parseError) {
-            console.error("Failed to parse questions as JSON:", parseError);
-            // Fallback: Split by newlines and clean up
-            parsedQuestions = questions
-                .split('\n')
-                .filter(q => q.trim().length > 0)
-                .map(q => q
-                    .replace(/^\d+\.\s*/, '') // Remove leading numbers
-                    .replace(/^["'\[\{]|["'\]\}]$/g, '') // Remove quotes and brackets
-                    .trim()
-                );
-                
-            if (parsedQuestions.length === 0) {
-                parsedQuestions = [questions]; // If all else fails, use the raw text
-            }
-        }
-    
+
         const interview = {
             role,
             type,
             level,
             techstack: typeof techstack === 'string' ? techstack.split(',').map(item => item.trim()) : techstack,
-            questions: parsedQuestions,
+            questions: JSON.parse(questions),
             userId: userid,
             finalized: true,
             coverImage: getRandomInterviewCover(),
             createdAt: new Date().toISOString()
         };
-        
+
         console.log("Document to be stored:", interview);
-    
-        try {
-            const docRef = await db.collection('interviews').add(interview);
-            console.log("Document stored successfully with ID:", docRef.id);
-            
-            // Update pending request with success result
-            pendingRequests.set(interviewId, {
-                completed: true,
-                result: { 
-                    success: true, 
-                    message: "Interview questions generated and stored successfully",
-                    documentId: docRef.id
-                },
-                params: params
-            });
-            
-            return { documentId: docRef.id };
-        } catch (firestoreError) {
-            console.error("Firestore error when adding document:", firestoreError);
-            throw new Error(`Firestore write failed: ${firestoreError instanceof Error ? firestoreError.message : String(firestoreError)}`);
-        }
+
+        const docRef = await db.collection('interviews').add(interview);
+        console.log("Document stored successfully with ID:", docRef.id);
+
+        pendingRequests.set(interviewId, {
+            completed: true,
+            result: { 
+                success: true, 
+                message: "Interview questions generated and stored successfully",
+                documentId: docRef.id
+            },
+            params: params
+        });
+
+        return { documentId: docRef.id };
     } catch (error) {
         console.error("Error in processing:", error);
-        
-        // Update pending request with error result
+
         pendingRequests.set(interviewId, {
             completed: true,
             result: { 
@@ -232,8 +191,7 @@ async function processInterview(interviewId: string, params: InterviewParams) {
             },
             params: params
         });
-        
-        // Re-throw the error so it's caught by the .catch() in the POST handler
+
         throw error;
     }
 }
