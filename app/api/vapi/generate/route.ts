@@ -1,42 +1,38 @@
-import { generateText } from 'ai'
-import { google } from '@ai-sdk/google'
-import { getRandomInterviewCover } from '@/lib/utils'
-import { db } from '@/firebase/admin'
+import { generateText } from 'ai';
+import { google } from '@ai-sdk/google';
+import { getRandomInterviewCover } from '@/lib/utils';
+import { db } from '@/firebase/admin';
 
 // Queue to store pending interview generation requests
 const pendingRequests = new Map();
 
 export async function GET(request: Request) {
-    // Get the interview ID from the URL params
     const url = new URL(request.url);
     const interviewId = url.searchParams.get('id');
-    
+
     if (!interviewId) {
         return Response.json({ success: false, error: "No interview ID provided" }, { status: 400 });
     }
 
-    // Check if we have a result for this ID
     if (pendingRequests.has(interviewId)) {
         const status = pendingRequests.get(interviewId);
-        
+
         if (status.completed) {
-            // If completed, return the result and clean up
             const result = { ...status.result };
             pendingRequests.delete(interviewId);
             return Response.json(result, { status: 200 });
         } else {
-            // If still processing, return processing status
-            return Response.json({ 
-                success: true, 
+            return Response.json({
+                success: true,
                 status: 'processing',
-                message: "Your interview is still being generated" 
+                message: "Your interview is still being generated"
             }, { status: 202 });
         }
     }
 
-    return Response.json({ 
-        success: false, 
-        error: "Interview not found" 
+    return Response.json({
+        success: false,
+        error: "Interview not found"
     }, { status: 404 });
 }
 
@@ -93,24 +89,23 @@ export async function POST(request: Request) {
             if (pendingRequests.has(interviewId)) {
                 pendingRequests.set(interviewId, {
                     completed: true,
-                    result: { 
-                        success: false, 
-                        error: "Processing failed: " + (error instanceof Error ? error.message : String(error)) 
+                    result: {
+                        success: false,
+                        error: "Processing failed: " + (error instanceof Error ? error.message : String(error))
                     },
                     params: requestBody
                 });
             }
         });
 
-    return Response.json({ 
-        success: true, 
+    return Response.json({
+        success: true,
         status: 'accepted',
         interviewId: interviewId,
-        message: "Interview generation started" 
+        message: "Interview generation started"
     }, { status: 202 });
 }
 
-// Background processing function
 interface InterviewParams {
     type: string;
     role: string;
@@ -126,7 +121,7 @@ async function processInterview(interviewId: string, params: InterviewParams) {
 
     try {
         console.log(`Generating questions for ${role} (${level}) with focus on ${type}`);
-        
+
         // Verify Firebase connection
         try {
             const testDoc = await db.collection('system').doc('test').get();
@@ -150,14 +145,25 @@ async function processInterview(interviewId: string, params: InterviewParams) {
             `
         });
 
-        console.log("Generated Questions:", questions);
+        console.log("Raw AI response:", questions);
+
+        let parsedQuestions;
+        try {
+            parsedQuestions = JSON.parse(questions);
+            if (!Array.isArray(parsedQuestions)) {
+                throw new Error("Questions are not in array format");
+            }
+        } catch (error) {
+            console.error("Error parsing questions:", error);
+            throw new Error("Invalid questions format: " + (error instanceof Error ? error.message : String(error)));
+        }
 
         const interview = {
             role,
             type,
             level,
             techstack: typeof techstack === 'string' ? techstack.split(',').map(item => item.trim()) : techstack,
-            questions: JSON.parse(questions),
+            questions: parsedQuestions,
             userId: userid,
             finalized: true,
             coverImage: getRandomInterviewCover(),
@@ -171,8 +177,8 @@ async function processInterview(interviewId: string, params: InterviewParams) {
 
         pendingRequests.set(interviewId, {
             completed: true,
-            result: { 
-                success: true, 
+            result: {
+                success: true,
                 message: "Interview questions generated and stored successfully",
                 documentId: docRef.id
             },
@@ -185,9 +191,9 @@ async function processInterview(interviewId: string, params: InterviewParams) {
 
         pendingRequests.set(interviewId, {
             completed: true,
-            result: { 
-                success: false, 
-                error: "Internal server error: " + (error instanceof Error ? error.message : String(error)) 
+            result: {
+                success: false,
+                error: "Internal server error: " + (error instanceof Error ? error.message : String(error))
             },
             params: params
         });
